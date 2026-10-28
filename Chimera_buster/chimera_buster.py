@@ -7,23 +7,25 @@ import math
 import time
 import edlib
 import pandas as pd
-import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 
 ##############################################################################
 
 # Take cluster concensus fasta and create list for each entry
 ## [name, fwd umi, rev umi, size]
 def readFastq(filename):
-    #Reads FASTQ file and remove the special characters!
+    #Reads FASTA file into [name, seq] pairs; sequences may be wrapped over several lines
     samples = []
     with open(filename) as fh:
-        while True:
-            name = fh.readline().rstrip() # read name
-            seq = fh.readline().rstrip() # read base sequence
-            if len(seq) == 0:
-                break
-            samples.append([name,seq])
-    return samples
+        for line in fh:
+            line = line.rstrip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                samples.append([line, ""])
+            elif samples:
+                samples[-1][1] += line
+    return [sample for sample in samples if sample[1]]
 
 ##############################################################################
 
@@ -53,7 +55,7 @@ def check_mismatch(ref_seq, test_seq, mismatch_tolerance):
 ##############################################################################
 
 #cycle through fwd umis and check for any matches with the allowed mismatch_tolerence
-def check_FWD_UMI(fwd_sample_num_list, fwd_umi, mismatch_tolerance,q):
+def check_FWD_UMI(fwd_sample_num_list, fwd_umi, mismatch_tolerance):
     fwd_lap_time = time.time()
     fwd_check_count = 0
     for seq in fwd_umi:
@@ -70,13 +72,13 @@ def check_FWD_UMI(fwd_sample_num_list, fwd_umi, mismatch_tolerance,q):
         if fwd_check_count % 1000 == 0:
             print(str(round((fwd_check_count/len(fwd_sample_num_list)*100), 2)) + " percent of UMIs processed. (%s seconds)              " % (time.time() - fwd_lap_time), end = '\r' )
             fwd_lap_time = time.time()
-    q.put(fwd_sample_num_list)
+    return fwd_sample_num_list
     
 
 ##############################################################################
 
 #cycle through rev umis and check for any matches with the allowed mismatch_tolerence
-def check_REV_UMI(rev_sample_num_list, rev_umi, mismatch_tolerance,q):
+def check_REV_UMI(rev_sample_num_list, rev_umi, mismatch_tolerance):
     rev_lap_time = time.time()
     rev_check_count = 0
     for seq in rev_umi:
@@ -90,7 +92,7 @@ def check_REV_UMI(rev_sample_num_list, rev_umi, mismatch_tolerance,q):
                 del rev_umi[rev_sample_num+1]
             else:
                 rev_sample_num = rev_sample_num + 1
-    q.put(rev_sample_num_list)
+    return rev_sample_num_list
 
 ##############################################################################
 
@@ -136,6 +138,8 @@ def chimera_buster(sample_file, size_file, output_name, mismatch_tolerance, chec
         size = sublist[-3][5:]
         sample.append(int(size))
         # add earlier cluster size
+        if name[:-2] not in size_dict:
+            raise ValueError("Cluster " + name + " has no cluster " + name[:-2] + " in " + size_file)
         pre_size = size_dict[name[:-2]]
         sample.append(int(pre_size))
         if len(sample) != 5:
@@ -170,53 +174,51 @@ def chimera_buster(sample_file, size_file, output_name, mismatch_tolerance, chec
     print ("Checking for duplicate UMIs...")
     #check for any non-exact matches using mismatch_tolerance as the cut off
     if mismatch_tolerance != 0:
-        
-        queue1 = multiprocessing.Queue()
-        queue2 = multiprocessing.Queue()
 
-        p1 = multiprocessing.Process(target=check_FWD_UMI, args=(fwd_sample_num_list, fwd_umi, mismatch_tolerance,queue1))
-        p2 = multiprocessing.Process(target=check_REV_UMI, args=(rev_sample_num_list, rev_umi, mismatch_tolerance,queue2))
-     
-        p1.start()
-        p2.start()
-
-        fwd_sample_list = queue1.get()
-        rev_sample_list = queue2.get()
+        #the fwd and rev checks run in parallel; a failure in either is raised here
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            fwd_job = pool.submit(check_FWD_UMI, fwd_sample_num_list, fwd_umi, mismatch_tolerance)
+            rev_job = pool.submit(check_REV_UMI, rev_sample_num_list, rev_umi, mismatch_tolerance)
+            fwd_sample_list = fwd_job.result()
+            rev_sample_list = rev_job.result()
 
         for sample in fwd_sample_list:
             if sample in rev_sample_list:
                 nonchimera_list.append(sample)
                 rev_sample_list.remove(sample)
-                
-        #make df of preliminary chimeras and non-chimeras
-        if check_clusters_status == "True":
-            df_non_chimeras_prelim = df.loc[df['Name'].isin(nonchimera_list)]
-            df_chimeras_prelim = df.loc[~df['Name'].isin(nonchimera_list)]
-            print ("Checking for missorted clusters...")
-        
-            #check for clustering issues
-            cluster_lap_time = time.time()
-            num1 = 0
-            while num1 < len(df_non_chimeras_prelim["Name"]):
-                num2 = 0
-                while num2 < len(df_chimeras_prelim["Name"]):
-                    fwd_chimera = check_mismatch(str(df_non_chimeras_prelim.iloc[num1,1]), str(df_chimeras_prelim.iloc[num2,1]), mismatch_tolerance)
-                    rev_chimera = check_mismatch(str(df_non_chimeras_prelim.iloc[num1,2]), str(df_chimeras_prelim.iloc[num2,2]), mismatch_tolerance)
-                    if fwd_chimera == True and rev_chimera == True:
-                            nonchimera_list.append(df_chimeras_prelim.iloc[num2,0])
-                    num2 = num2 + 1
-                num1 = num1 + 1
-                if num1 % 100 == 0:
-                    print(str(round((num1/len(df_non_chimeras_prelim["Name"])*100), 2)) + " percent of clusters checked. (%s seconds)              " % (time.time() - cluster_lap_time), end = '\r' )
-                    cluster_lap_time = time.time()
-                
+
     #allows for skipping the lengthy process above when not needed
     else:
         nonchimera_list = fwd_sample_num_list
-        
+
+    #a removed cluster whose fwd AND rev UMIs both match a kept cluster is the same
+    #molecule split by the clustering, not a chimera: report it as a duplicate
+    duplicate_list = []
+    if check_clusters_status == "True":
+        df_non_chimeras_prelim = df.loc[df['Name'].isin(nonchimera_list)]
+        df_chimeras_prelim = df.loc[~df['Name'].isin(nonchimera_list)]
+        print ("Checking for missorted clusters...")
+
+        #check for clustering issues
+        cluster_lap_time = time.time()
+        num1 = 0
+        while num1 < len(df_non_chimeras_prelim["Name"]):
+            num2 = 0
+            while num2 < len(df_chimeras_prelim["Name"]):
+                fwd_chimera = check_mismatch(str(df_non_chimeras_prelim.iloc[num1,1]), str(df_chimeras_prelim.iloc[num2,1]), mismatch_tolerance)
+                rev_chimera = check_mismatch(str(df_non_chimeras_prelim.iloc[num1,2]), str(df_chimeras_prelim.iloc[num2,2]), mismatch_tolerance)
+                if fwd_chimera == True and rev_chimera == True:
+                        duplicate_list.append(df_chimeras_prelim.iloc[num2,0])
+                num2 = num2 + 1
+            num1 = num1 + 1
+            if num1 % 100 == 0:
+                print(str(round((num1/len(df_non_chimeras_prelim["Name"])*100), 2)) + " percent of clusters checked. (%s seconds)              " % (time.time() - cluster_lap_time), end = '\r' )
+                cluster_lap_time = time.time()
+
     #make df of final chimeras and non-chimeras
     df_non_chimeras = df.loc[df['Name'].isin(nonchimera_list)]
-    df_chimeras = df.loc[~df['Name'].isin(nonchimera_list)]
+    df_duplicates = df.loc[df['Name'].isin(duplicate_list) & ~df['Name'].isin(nonchimera_list)]
+    df_chimeras = df.loc[~df['Name'].isin(nonchimera_list) & ~df['Name'].isin(duplicate_list)]
     
     print("All samples processed. (%s seconds)                                              " % (time.time() - lap_time))
     lap_time = time.time()
@@ -225,10 +227,16 @@ def chimera_buster(sample_file, size_file, output_name, mismatch_tolerance, chec
     #outputs csv of chimeras and non-chimeras
     df_non_chimeras.to_csv((output_name + "_non_chimeras.csv"), index=False)
     df_chimeras.to_csv((output_name + "_chimeras.csv"), index=False)
+    df_duplicates.to_csv((output_name + "_duplicates.csv"), index=False)
 
     #writes text file of chimeric transcript IDs        
     with open(output_name+"_chimera_list.txt",'w') as tfile:
         for sample in list(df_chimeras['Name']):
+            tfile.write(sample + "\n")
+
+    #writes text file of duplicate transcript IDs (empty unless check_clusters is True)
+    with open(output_name+"_duplicate_list.txt",'w') as tfile:
+        for sample in list(df_duplicates['Name']):
             tfile.write(sample + "\n")
 
     #writes text file of non-chimeric transcript IDs         
@@ -238,5 +246,6 @@ def chimera_buster(sample_file, size_file, output_name, mismatch_tolerance, chec
             
     print("# of Chimeras: " + str(len(list(df_chimeras['Name']))))
     print("# of Non-Chimeras: " + str(len(list(df_non_chimeras['Name']))))
+    print("# of Duplicates: " + str(len(list(df_duplicates['Name']))))
     print ("Complete.\n--- %s minutes total ---" % ((time.time() - start_time)/60))
     

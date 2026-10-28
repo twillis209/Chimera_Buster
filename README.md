@@ -37,7 +37,7 @@ The following input files are optional:
 | ------ | ------ |
 |-h, --help |  Prints help message to terminal. |
 |-m int, --mismatch int|  Designates the maximum number of mismatched/indel bases allowed when comparing UMIs. Default is 1. |
-|-c True/False, --check_clusters True/False |  When set to true, chimeric reads are rechecked to account for any clustering issues earlier in the pipeline. WARNING: this part of the code is slow and is only recommended for low input samples. Default is False. |
+|-c True/False, --check_clusters True/False |  When set to true (case-insensitive), removed reads whose fwd and rev UMIs both match a kept read are reported as duplicates (the same molecule split by clustering) instead of chimeras. They are not added back to the non-chimeras. WARNING: this part of the code is slow and is only recommended for low input samples. Default is False. |
 
 ### Outputs
  The main output files created by the pipeline are:
@@ -47,6 +47,15 @@ The following input files are optional:
 | {output_file_prefix}_nonchimera_list.txt | A list of all nonchimeric sample IDs. |
 | {output_file_prefix}_chimeras.csv | A csv of the sample ID, UMI sequences, and cluster counts for each chimeric read. |
 | {output_file_prefix}_non_chimeras.csv |  A csv of the sample ID, UMI sequences, and cluster counts for each nonchimeric read. |
+| {output_file_prefix}_duplicate_list.txt | A list of duplicate sample IDs (empty unless --check_clusters is True). |
+| {output_file_prefix}_duplicates.csv | A csv of the sample ID, UMI sequences, and cluster counts for each duplicate read. |
+
+### Changes in 1.3.0 (fork)
+- `--check_clusters True` no longer adds split clusters of an already-kept molecule back to the non-chimeras; they are written to the new duplicate outputs. It now also runs when `--mismatch 0`.
+- Wrapped (multi-line) FASTA input is read correctly.
+- A failure in a UMI-checking worker process now stops the run instead of hanging it.
+- A consensus cluster with no matching preliminary cluster raises an error naming it.
+- Tests: `pytest tests`.
 
 **************************
 ## Help

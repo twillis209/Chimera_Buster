@@ -33,7 +33,7 @@ Author: Jessica L Albert'''))
 
     parser.add_argument("-c", "--check_clusters", type = str,
                         metavar = "True/False", default = "False",
-                        help = "When set to True, chimeric reads are rechecked to account for any clustering issues earlier in the pipeline. WARNING: this part of the code is slow and is only recommended for low input samples.")
+                        help = "When set to True, removed reads whose fwd and rev UMIs both match a kept read are reported as duplicates (the same molecule split by clustering) instead of chimeras. WARNING: this part of the code is slow and is only recommended for low input samples.")
  
     # parse the arguments from standard input
     args = parser.parse_args()
@@ -50,7 +50,7 @@ Author: Jessica L Albert'''))
         mismatch_tolerance = args.mismatch
         
     if args.check_clusters !=None:
-        check_clusters_status = args.check_clusters
+        check_clusters_status = "True" if args.check_clusters.lower() == "true" else "False"
              
     chimera_buster(sample_file, size_file, output_name, mismatch_tolerance,check_clusters_status)
     
