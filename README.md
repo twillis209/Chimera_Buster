@@ -50,12 +50,13 @@ The following input files are optional:
 | {output_file_prefix}_duplicate_list.txt | A list of duplicate sample IDs (empty unless --check_clusters is True). |
 | {output_file_prefix}_duplicates.csv | A csv of the sample ID, UMI sequences, and cluster counts for each duplicate read. |
 
-### Changes in 1.3.0 (fork)
+### Changes in 1.3.0–1.3.1 (fork)
 - `--check_clusters True` no longer adds split clusters of an already-kept molecule back to the non-chimeras; they are written to the new duplicate outputs. It now also runs when `--mismatch 0`.
 - Wrapped (multi-line) FASTA input is read correctly.
 - A failure in a UMI-checking worker process now stops the run instead of hanging it.
 - A consensus cluster with no matching preliminary cluster raises an error naming it.
 - Tests: `pytest tests`.
+- 1.3.1: stale build artefacts (`build/`, `dist/`, `*.egg-info`) are no longer tracked; they made wheels built on macOS ship the package as `Chimera_Buster`, so the `Chimera_Buster` command failed to import.
 
 **************************
 ## Help

@@ -1,2 +1,0 @@
-[console_scripts]
-Chimera_Buster = Chimera_buster.CLI_chimera_buster:main
